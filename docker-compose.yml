@@ -1,0 +1,91 @@
+version: '3.8'
+
+services:
+  # API Gateway на Nginx
+  nginx-gateway:
+    image: nginx:alpine
+    container_name: api-gateway
+    ports:
+      - "80:80"
+    volumes:
+      - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+    depends_on:
+      - security
+      - uploader
+      - minio
+    networks:
+      - microservices-network
+
+  # Minio сервис для хранения файлов
+  minio:
+    image: minio/minio:latest
+    container_name: minio
+    environment:
+      MINIO_ROOT_USER: minioadmin
+      MINIO_ROOT_PASSWORD: minioadmin123
+    command: server /data --console-address ":9001"
+    volumes:
+      - minio-data:/data
+    ports:
+      - "9000:9000"
+      - "9001:9001"
+    networks:
+      - microservices-network
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
+      interval: 30s
+      timeout: 20s
+      retries: 3
+
+  # Создание бакета в Minio
+  minio-init:
+    image: minio/mc:latest
+    depends_on:
+      minio:
+        condition: service_healthy
+    entrypoint: >
+      /bin/sh -c "
+      /usr/bin/mc config host add myminio http://minio:9000 minioadmin minioadmin123;
+      /usr/bin/mc mb myminio/images || true;
+      /usr/bin/mc policy set public myminio/images;
+      exit 0;
+      "
+    networks:
+      - microservices-network
+
+  # Сервис безопасности (имитация)
+  security:
+    build: ./security
+    container_name: security-service
+    environment:
+      - JWT_SECRET=mysecretkey123
+      - SERVER_PORT=8080
+    ports:
+      - "8080:8080"
+    networks:
+      - microservices-network
+
+  # Сервис загрузки и обработки изображений (имитация)
+  uploader:
+    build: ./uploader
+    container_name: uploader-service
+    environment:
+      - MINIO_ENDPOINT=minio
+      - MINIO_PORT=9000
+      - MINIO_ACCESS_KEY=minioadmin
+      - MINIO_SECRET_KEY=minioadmin123
+      - SERVER_PORT=8081
+    depends_on:
+      minio:
+        condition: service_healthy
+    ports:
+      - "8081:8081"
+    networks:
+      - microservices-network
+
+volumes:
+  minio-data:
+
+networks:
+  microservices-network:
+    driver: bridge
